@@ -17,6 +17,7 @@ import argparse
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime, timezone
 
 # Importing main first also quiets noisy libraries and loads the keys.
@@ -24,7 +25,7 @@ from main import FallTemplateBot2026
 from my_bot import MrpofficeBot
 from bot_settings import make_llms
 
-from forecasting_tools import Benchmarker, MetaculusClient
+from forecasting_tools import MetaculusClient, MonetaryCostManager
 
 logger = logging.getLogger(__name__)
 
@@ -44,21 +45,40 @@ def make_bot(bot_class, predictions_per_question: int):
     )
 
 
+async def run_one_bot(bot, questions) -> dict:
+    with MonetaryCostManager() as cost_manager:
+        started = time.time()
+        reports = await bot.forecast_questions(questions, return_exceptions=True)
+        minutes = (time.time() - started) / 60
+        cost = cost_manager.current_usage
+    good = [r for r in reports if not isinstance(r, BaseException)]
+    errors = [str(r) for r in reports if isinstance(r, BaseException)]
+    scores = [r.expected_baseline_score for r in good if r.expected_baseline_score is not None]
+    return {
+        "reports": good,
+        "errors": errors,
+        "cost": cost,
+        "minutes": minutes,
+        "score": (sum(scores) / len(scores)) if scores else None,
+    }
+
+
+async def run_both(questions, predictions: int) -> dict:
+    results = {}
+    for label, bot_class in [(OLD, FallTemplateBot2026), (NEW, MrpofficeBot)]:
+        logger.info(f"===== Running {label} on {len(questions)} questions =====")
+        results[label] = await run_one_bot(make_bot(bot_class, predictions), questions)
+    return results
+
+
 def pct(value) -> str:
     return "-" if value is None else f"{value * 100:.0f}%"
 
 
-def safe_score(benchmark) -> float | None:
-    try:
-        return float(benchmark.average_expected_baseline_score)
-    except Exception:
-        return None
-
-
-def build_rows(benchmarks) -> list[dict]:
+def build_rows(results: dict) -> list[dict]:
     rows: dict[int, dict] = {}
-    for label, benchmark in zip([OLD, NEW], benchmarks):
-        for report in benchmark.forecast_reports:
+    for label, result in results.items():
+        for report in result["reports"]:
             question = report.question
             row = rows.setdefault(
                 question.id_of_question,
@@ -72,7 +92,7 @@ def build_rows(benchmarks) -> list[dict]:
     return list(rows.values())
 
 
-def write_summary(benchmarks, rows, asked: int, predictions: int) -> str:
+def write_summary(results: dict, rows: list[dict], asked: int, predictions: int) -> str:
     both = [r for r in rows if r.get(OLD) is not None and r.get(NEW) is not None and r["crowd"] is not None]
     gap_old = [abs(r[OLD] - r["crowd"]) for r in both]
     gap_new = [abs(r[NEW] - r["crowd"]) for r in both]
@@ -89,12 +109,11 @@ def write_summary(benchmarks, rows, asked: int, predictions: int) -> str:
         "| Bot | Score (higher is better) | Questions answered | Failed | Cost |",
         "|---|---|---|---|---|",
     ]
-    for label, benchmark in zip([OLD, NEW], benchmarks):
-        score = safe_score(benchmark)
-        cost = benchmark.total_cost
+    for label, result in results.items():
+        score, cost = result["score"], result["cost"]
         lines.append(
             f"| {label} | {'-' if score is None else f'{score:.2f}'} | "
-            f"{len(benchmark.forecast_reports)} | {len(benchmark.failed_report_errors)} | "
+            f"{len(result['reports'])} | {len(result['errors'])} | "
             f"{'-' if cost is None else f'${cost:.2f}'} |"
         )
     lines += [""]
@@ -134,21 +153,10 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
     questions = MetaculusClient().get_benchmark_questions(args.questions)
-    bots = [
-        make_bot(FallTemplateBot2026, args.predictions),
-        make_bot(MrpofficeBot, args.predictions),
-    ]
-    benchmarks = asyncio.run(
-        Benchmarker(
-            forecast_bots=bots,
-            questions_to_use=questions,
-            file_path_to_save_reports=None,
-            concurrent_question_batch_size=5,
-        ).run_benchmark()
-    )
+    results = asyncio.run(run_both(questions, args.predictions))
 
-    rows = build_rows(benchmarks)
-    summary = write_summary(benchmarks, rows, args.questions, args.predictions)
+    rows = build_rows(results)
+    summary = write_summary(results, rows, args.questions, args.predictions)
     with open("compare_summary.md", "w", encoding="utf-8") as handle:
         handle.write(summary)
     with open("compare_results.json", "w", encoding="utf-8") as handle:
@@ -160,13 +168,14 @@ def main() -> None:
                 "bots": [
                     {
                         "name": label,
-                        "score": safe_score(benchmark),
-                        "answered": len(benchmark.forecast_reports),
-                        "failed": len(benchmark.failed_report_errors),
-                        "cost": benchmark.total_cost,
-                        "minutes": benchmark.time_taken_in_minutes,
+                        "score": result["score"],
+                        "answered": len(result["reports"]),
+                        "failed": len(result["errors"]),
+                        "errors": result["errors"][:5],
+                        "cost": result["cost"],
+                        "minutes": result["minutes"],
                     }
-                    for label, benchmark in zip([OLD, NEW], benchmarks)
+                    for label, result in results.items()
                 ],
                 "rows": rows,
             },
