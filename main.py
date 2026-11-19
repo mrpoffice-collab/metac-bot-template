@@ -41,6 +41,8 @@ from forecasting_tools import (
     structure_output,
 )
 
+from bot_settings import make_llms
+
 dotenv.load_dotenv()
 logger = logging.getLogger(__name__)
 
@@ -715,20 +717,9 @@ if __name__ == "__main__":
         folder_to_save_reports_to=None,
         skip_previously_forecasted_questions=True,
         extra_metadata_in_explanation=True,
-        # Models pinned 2026-11-19: the library's default search model
-        # (openai/gpt-4o-search-preview) was retired on OpenRouter and the test run failed.
-        # Cheap settings on purpose while learning; change one thing at a time and measure.
-        llms={
-            "default": GeneralLlm(
-                model="openrouter/anthropic/claude-haiku-5.5",
-                temperature=0.3,
-                timeout=60,
-                allowed_tries=2,
-            ),
-            "summarizer": "openrouter/openai/gpt-4o-mini",
-            "researcher": "openrouter/perplexity/sonar",
-            "parser": "openrouter/openai/gpt-4o-mini",
-        },
+        # Models are named in bot_settings.py (pinned 2026-11-19: the library's default
+        # search model, openai/gpt-4o-search-preview, was retired on OpenRouter).
+        llms=make_llms(),
     )
 
     # Per-mode tournament URL shown in the summary banner footer. These

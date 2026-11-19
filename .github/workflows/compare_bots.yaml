@@ -1,0 +1,54 @@
+name: Compare old bot and new bot
+
+# Runs the stock bot and mrpofficebot on the same questions and scores both
+# against the crowd. Started by hand only. Posts nothing to Metaculus.
+on:
+  workflow_dispatch:
+    inputs:
+      questions:
+        description: "How many questions to test on"
+        default: "20"
+      predictions:
+        description: "Answers per question (combined into one)"
+        default: "3"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  compare_job:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.3.0
+        with:
+          version: "0.13.1"
+      - name: Install dependencies
+        run: uv sync --locked
+      - name: Compare the two bots
+        run: |
+          uv run python compare_bots.py --questions ${{ inputs.questions || 20 }} --predictions ${{ inputs.predictions || 3 }}
+        env:
+          METACULUS_TOKEN: ${{ secrets.METACULUS_TOKEN }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      - name: Show the result on the run page
+        if: always()
+        run: |
+          if [ -f compare_summary.md ]; then cat compare_summary.md >> $GITHUB_STEP_SUMMARY; fi
+      - name: Keep the result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: comparison
+          path: |
+            compare_summary.md
+            compare_results.json
+          retention-days: 90
+          if-no-files-found: ignore
