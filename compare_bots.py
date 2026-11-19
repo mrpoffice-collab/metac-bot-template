@@ -17,6 +17,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import time
 from datetime import datetime, timezone
 
@@ -152,7 +153,18 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
-    questions = MetaculusClient().get_benchmark_questions(args.questions)
+    # Metaculus hides the crowd's forecast from bot accounts, so the questions are
+    # read with the owner's own key. That key is used for reading only.
+    human_token = os.getenv("METACULUS_HUMAN_TOKEN")
+    if not human_token:
+        raise SystemExit("METACULUS_HUMAN_TOKEN is not set; the test needs the owner's own Metaculus key to see the crowd.")
+    reader = MetaculusClient(token=human_token)
+    same_account = reader.get_current_user_id() == MetaculusClient().get_current_user_id()
+    logger.info(f"Question reader is the same account as the bot: {same_account}")
+    if same_account:
+        raise SystemExit("METACULUS_HUMAN_TOKEN is the bot's key, not the owner's. The crowd's forecasts would be hidden.")
+
+    questions = reader.get_benchmark_questions(args.questions)
     results = asyncio.run(run_both(questions, args.predictions))
 
     rows = build_rows(results)
