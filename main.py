@@ -715,17 +715,20 @@ if __name__ == "__main__":
         folder_to_save_reports_to=None,
         skip_previously_forecasted_questions=True,
         extra_metadata_in_explanation=True,
-        # llms={
-        #     "default": GeneralLlm(
-        #         model="openrouter/openai/gpt-4o",
-        #         temperature=0.3,
-        #         timeout=40,
-        #         allowed_tries=2,
-        #     ),
-        #     "summarizer": "openai/gpt-4o-mini",
-        #     "researcher": "asknews/news-summaries",
-        #     "parser": "openai/gpt-4o-mini",
-        # },
+        # Models pinned 2026-11-19: the library's default search model
+        # (openai/gpt-4o-search-preview) was retired on OpenRouter and the test run failed.
+        # Cheap settings on purpose while learning; change one thing at a time and measure.
+        llms={
+            "default": GeneralLlm(
+                model="openrouter/anthropic/claude-haiku-5.5",
+                temperature=0.3,
+                timeout=60,
+                allowed_tries=2,
+            ),
+            "summarizer": "openrouter/openai/gpt-4o-mini",
+            "researcher": "openrouter/perplexity/sonar",
+            "parser": "openrouter/openai/gpt-4o-mini",
+        },
     )
 
     # Per-mode tournament URL shown in the summary banner footer. These
