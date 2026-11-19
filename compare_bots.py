@@ -67,12 +67,18 @@ def crowd_forecast(question) -> float | None:
 
 
 def pick_questions(reader: MetaculusClient, wanted: int) -> list:
-    """Newest open yes/no questions that at least 30 people have forecast and that show a crowd number."""
+    """Open yes/no questions that at least 30 people have forecast and that show a crowd number.
+
+    Metaculus hides the crowd's number for the first days of a new question
+    ("Revealed in 4 days"), so only questions opened at least two weeks ago are used.
+    """
+    now = datetime.now(timezone.utc)
     api_filter = ApiFilter(
         allowed_statuses=["open"],
         allowed_types=["binary"],
         num_forecasters_gte=30,
-        open_time_gt=datetime.now(timezone.utc) - timedelta(days=365),
+        open_time_gt=now - timedelta(days=365),
+        open_time_lt=now - timedelta(days=14),
         group_question_mode="exclude",
     )
     candidates = asyncio.run(
