@@ -89,6 +89,11 @@ def pick_questions(reader: MetaculusClient, wanted: int) -> list:
             aggregations = candidates[0].api_json["question"]["aggregations"]
             shape = {name: ("has latest" if (value or {}).get("latest") else "no latest") for name, value in aggregations.items()}
             logger.info(f"Question picker: crowd data on the first question looks like {shape}")
+            logger.info(f"Question picker: raw crowd data in the list: {json.dumps(aggregations)[:900]}")
+            detail = reader.get_question_by_post_id(candidates[0].id_of_post)
+            detail_aggregations = detail.api_json["question"]["aggregations"]
+            logger.info(f"Question picker: raw crowd data when fetched alone: {json.dumps(detail_aggregations)[:1500]}")
+            logger.info(f"Question picker: first question is {candidates[0].page_url}, forecasters {candidates[0].num_forecasters}")
         except Exception as error:
             logger.info(f"Question picker: could not read crowd data on the first question ({error})")
     chosen = []
