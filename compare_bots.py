@@ -19,14 +19,14 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 # Importing main first also quiets noisy libraries and loads the keys.
 from main import FallTemplateBot2026
 from my_bot import MrpofficeBot
 from bot_settings import make_llms
 
-from forecasting_tools import MetaculusClient, MonetaryCostManager
+from forecasting_tools import ApiFilter, MetaculusClient, MonetaryCostManager
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,64 @@ def make_bot(bot_class, predictions_per_question: int):
         skip_previously_forecasted_questions=False,
         llms=make_llms(),
     )
+
+
+def crowd_forecast(question) -> float | None:
+    """The crowd's current chance of Yes, read straight from Metaculus's own data.
+
+    The library's built-in reader came back empty on every question (2026-11-19),
+    so this looks under each name Metaculus uses for the crowd's number.
+    """
+    try:
+        aggregations = question.api_json["question"]["aggregations"]
+    except (KeyError, TypeError):
+        return None
+    for method in ("recency_weighted", "unweighted", "single_aggregation", "metaculus_prediction"):
+        try:
+            centers = aggregations[method]["latest"]["centers"]
+            if centers and centers[0] is not None:
+                return float(centers[0])
+        except (KeyError, TypeError, IndexError):
+            continue
+    return None
+
+
+def pick_questions(reader: MetaculusClient, wanted: int) -> list:
+    """Newest open yes/no questions that at least 30 people have forecast and that show a crowd number."""
+    api_filter = ApiFilter(
+        allowed_statuses=["open"],
+        allowed_types=["binary"],
+        num_forecasters_gte=30,
+        open_time_gt=datetime.now(timezone.utc) - timedelta(days=365),
+        group_question_mode="exclude",
+    )
+    candidates = asyncio.run(
+        reader.get_questions_matching_filter(
+            api_filter,
+            num_questions=wanted * 5,
+            randomly_sample=False,
+            error_if_question_target_missed=False,
+        )
+    )
+    logger.info(f"Question picker: {len(candidates)} open yes/no questions fetched")
+    if candidates:
+        try:
+            aggregations = candidates[0].api_json["question"]["aggregations"]
+            shape = {name: ("has latest" if (value or {}).get("latest") else "no latest") for name, value in aggregations.items()}
+            logger.info(f"Question picker: crowd data on the first question looks like {shape}")
+        except Exception as error:
+            logger.info(f"Question picker: could not read crowd data on the first question ({error})")
+    chosen = []
+    for question in candidates:
+        crowd = crowd_forecast(question)
+        if crowd is None:
+            continue
+        question.community_prediction_at_access_time = crowd
+        chosen.append(question)
+        if len(chosen) == wanted:
+            break
+    logger.info(f"Question picker: {len(chosen)} of {len(candidates)} show a crowd forecast; using {len(chosen)}")
+    return chosen
 
 
 async def run_one_bot(bot, questions) -> dict:
@@ -164,7 +222,9 @@ def main() -> None:
     if same_account:
         raise SystemExit("METACULUS_HUMAN_TOKEN is the bot's key, not the owner's. The crowd's forecasts would be hidden.")
 
-    questions = reader.get_benchmark_questions(args.questions)
+    questions = pick_questions(reader, args.questions)
+    if not questions:
+        raise SystemExit("No open yes/no questions with a crowd forecast were found, so there is nothing to test on.")
     results = asyncio.run(run_both(questions, args.predictions))
 
     rows = build_rows(results)
